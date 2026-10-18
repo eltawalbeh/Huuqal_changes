@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router'
 import { NeonAdminGate } from '../../components/NeonAdminGate'
+import { neonClient } from '../../utils/neonCms'
 import { LayoutDashboard, UtensilsCrossed, Settings, Users, LogOut, ExternalLink, Search, FileText, Layers, Megaphone } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { DatabaseStatusDot } from '../../components/DatabaseStatus'
@@ -64,7 +65,7 @@ export default function AdminLayout() {
           <a href="/" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '8px', color: C.sand, textDecoration: 'none', fontSize: '13px' }}>
             <ExternalLink size={14} /> View Site
           </a>
-          <button onClick={() => { logout(); navigate('/admin/login') }} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '8px', background: 'none', border: 'none', color: C.sand, cursor: 'pointer', fontSize: '13px', width: '100%', textAlign: 'left' }}>
+          <button onClick={() => { void neonClient.auth.signOut().catch(() => {}); logout(); navigate('/admin/login') }} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '8px', background: 'none', border: 'none', color: C.sand, cursor: 'pointer', fontSize: '13px', width: '100%', textAlign: 'left' }}>
             <LogOut size={14} /> Sign Out
           </button>
           <div style={{ padding: '10px 12px', borderTop: `1px solid rgba(250,225,192,0.08)`, marginTop: '4px' }}>
