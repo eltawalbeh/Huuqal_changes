@@ -20,7 +20,7 @@ function applyToLS(key: string, data: object, event: string) {
 
 // Bump this value when code-shipped CMS defaults change. This clears local CMS
 // caches once after deploy, not on every visit.
-const DATA_VERSION = 10
+const DATA_VERSION = 11
 const CACHE_META_KEY = 'hq_cms_cache_meta'
 
 type CacheMeta = {
