@@ -1,3 +1,4 @@
+import { neonReadCms, neonWriteCms, NEON_DATA_API_URL } from './neonCms'
 import { projectId, publicAnonKey } from '/utils/supabase/info'
 
 const FUNCTION_SLUG = 'make-server-60022939'
@@ -11,7 +12,7 @@ const TABLE_CANDIDATES = ['kv_store_0947ad50', 'kv_store_60022939']
 export type CmsSection = 'settings' | 'content' | 'seo' | 'menu' | 'seed_version' | 'categories' | 'revision'
 export type CmsHealth = {
   ok: boolean
-  provider: 'Supabase Edge Function' | 'Supabase PostgREST'
+  provider: 'Neon Data API' | 'Supabase Edge Function' | 'Supabase PostgREST'
   latency_ms: number
   checkedAt: Date
   error: string | null
@@ -86,13 +87,23 @@ export function cmsLoadResult(section: CmsSection): Promise<CmsLoadResult> {
   if (pending) return pending
 
   const task = (async (): Promise<CmsLoadResult> => {
-    if (quotaIsBlocked()) return { ok: false, value: null, status: 402, error: 'Supabase quota exceeded; retry later' }
+    // Neon is the current publishing source. Do not use the legacy Supabase
+    // revision to overwrite newer Neon data after the original quota resets.
+    try {
+      const value = await neonReadCms(section)
+      return { ok: true, value, status: 200 }
+    } catch (error: any) {
+      console.warn('Neon CMS temporarily unavailable; using legacy read fallback:', section, error)
+    }
+
+    // Temporary read-only failover to Supabase; quota-blocked reads must not
+    // erase the local cache or bundled menu.
+    if (quotaIsBlocked()) return { ok: false, value: null, status: 402, error: 'Supabase quota exceeded; Neon unavailable' }
     try {
       const edge = await edgeLoad(section)
       if (edge.ok) return { ok: true, value: edge.value, status: edge.status }
       if (edge.status === 402) return { ok: false, value: null, status: 402, error: edge.text ?? 'Quota exceeded' }
     } catch (error) {
-      // Edge may be unconfigured; a REST fallback is valid for network errors.
       console.warn('CMS Edge unavailable; trying PostgREST:', error)
     }
 
@@ -169,54 +180,10 @@ export async function uploadImage(file: File): Promise<string> {
   )
 }
 
+// Writes go to ONE authoritative backend only (Neon). A rejected Neon write
+// never falls back to the legacy anonymous-write Supabase database.
 async function cmsSaveRaw(section: CmsSection, data: unknown): Promise<void> {
-  let edgeError = ''
-
-  // Skip the known-unavailable Edge route after its first 404 in this session.
-  if (edgeAvailability !== 'unavailable' && !unsupportedEdgeSections.has(section) && !quotaIsBlocked()) {
-    try {
-      const res = await fetch(`${EDGE_BASE}/cms/${section}`, {
-        method: 'POST',
-        headers: AUTH_HEADERS,
-        body: JSON.stringify(data),
-      })
-      if (res.ok) {
-        edgeAvailability = 'available'
-        return
-      }
-      rememberQuotaStatus(res.status)
-      if (res.status === 404) edgeAvailability = 'unavailable'
-      if (res.status === 400) unsupportedEdgeSections.add(section)
-      edgeError = `${res.status}: ${await res.text().catch(() => '')}`
-    } catch (e: any) {
-      edgeError = e?.message ?? String(e)
-    }
-  }
-
-  if (quotaIsBlocked()) throw new Error('Supabase quota exceeded (HTTP 402). Save aborted.')
-  let firstBlockingError = ''
-  let lastError = ''
-  for (const table of TABLE_CANDIDATES) {
-    const res = await fetch(`${REST_BASE}/${table}?on_conflict=key`, {
-      method: 'POST',
-      headers: { ...AUTH_HEADERS, Prefer: 'resolution=merge-duplicates' },
-      body: JSON.stringify({ key: keyFor(section), value: data }),
-    })
-    if (res.ok || res.status === 201) return
-    rememberQuotaStatus(res.status)
-    const message = `PostgREST ${table} returned ${res.status}: ${await res.text().catch(() => '')}`
-    lastError = message
-    if (res.status !== 404) {
-      if (!firstBlockingError) firstBlockingError = message
-      break
-    }
-  }
-
-  if (quotaIsBlocked()) throw new Error('Supabase quota exceeded (HTTP 402). Save aborted.')
-  const directError = firstBlockingError || lastError
-  throw new Error(
-    `Supabase is connected for reads, but writes are not configured yet. Edge Function write failed (${edgeError}). Direct database write failed (${directError}). Deploy the Edge Function from Make settings, or apply the included Supabase migration to enable CMS writes and Storage uploads.`,
-  )
+  await neonWriteCms(section, data)
 }
 
 export async function cmsSave(section: CmsSection, data: unknown): Promise<void> {
@@ -230,6 +197,17 @@ export async function cmsSave(section: CmsSection, data: unknown): Promise<void>
 
 export async function checkCmsHealth(): Promise<CmsHealth> {
   const start = Date.now()
+  try {
+    await neonReadCms('settings')
+    return {
+      ok: true, provider: 'Neon Data API', latency_ms: Date.now() - start,
+      checkedAt: new Date(), error: null,
+      keepaliveUrl: `${NEON_DATA_API_URL}/cms_store?select=key&key=eq.cms%3Asettings&limit=1`,
+      keepaliveHeaders: {},
+    }
+  } catch (error) {
+    console.warn('Neon health check failed; checking old Supabase:', error)
+  }
   try {
     const edge = await edgeLoad('settings')
     const latency_ms = Date.now() - start
