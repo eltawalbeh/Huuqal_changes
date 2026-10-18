@@ -173,7 +173,7 @@ async function cmsSaveRaw(section: CmsSection, data: unknown): Promise<void> {
   let edgeError = ''
 
   // Skip the known-unavailable Edge route after its first 404 in this session.
-  if (edgeAvailability !== 'unavailable') {
+  if (edgeAvailability !== 'unavailable' && !unsupportedEdgeSections.has(section) && !quotaIsBlocked()) {
     try {
       const res = await fetch(`${EDGE_BASE}/cms/${section}`, {
         method: 'POST',
@@ -186,6 +186,7 @@ async function cmsSaveRaw(section: CmsSection, data: unknown): Promise<void> {
       }
       rememberQuotaStatus(res.status)
       if (res.status === 404) edgeAvailability = 'unavailable'
+      if (res.status === 400) unsupportedEdgeSections.add(section)
       edgeError = `${res.status}: ${await res.text().catch(() => '')}`
     } catch (e: any) {
       edgeError = e?.message ?? String(e)
@@ -211,6 +212,7 @@ async function cmsSaveRaw(section: CmsSection, data: unknown): Promise<void> {
     }
   }
 
+  if (quotaIsBlocked()) throw new Error('Supabase quota exceeded (HTTP 402). Save aborted.')
   const directError = firstBlockingError || lastError
   throw new Error(
     `Supabase is connected for reads, but writes are not configured yet. Edge Function write failed (${edgeError}). Direct database write failed (${directError}). Deploy the Edge Function from Make settings, or apply the included Supabase migration to enable CMS writes and Storage uploads.`,
